@@ -26,6 +26,18 @@ class PoseDrive(Node):
             msg.speed = 1.0
             msg.steering = -2.0
             self.drive_publisher.publish(msg)
+        elif msg.data == "forward":
+            msg = RemoteDriverDriveCommand()
+            msg.header.stamp = self.get_clock().now().to_msg()
+            msg.speed = 0.33
+            msg.steering = 0.0
+            self.drive_publisher.publish(msg)
+        elif msg.data == "backward":
+            msg = RemoteDriverDriveCommand()
+            msg.header.stamp = self.get_clock().now().to_msg()
+            msg.speed = -0.33
+            msg.steering = 0.0
+            self.drive_publisher.publish(msg)
 
 def main(args=None):
     rclpy.init(args=args)
