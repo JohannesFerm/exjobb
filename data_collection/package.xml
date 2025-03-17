@@ -1,0 +1,18 @@
+<?xml version="1.0"?>
+<?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
+<package format="3">
+  <name>data_collection</name>
+  <version>0.0.0</version>
+  <description>Node for data collection</description>
+  <maintainer email="johannesferm1@gmail.com">marcus</maintainer>
+  <license>TODO: License declaration</license>
+
+  <depend>rclpy</depend>
+  <depend>hqv_public_interface</depend>
+  <depend>std_msgs</depend>
+  <exec_depend>python3-flask</exec_depend>
+  <exec_depend>python3-pyaudio</exec_depend>
+  <export>
+    <build_type>ament_python</build_type>
+  </export>
+</package>

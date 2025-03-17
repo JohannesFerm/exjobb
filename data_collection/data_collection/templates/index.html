@@ -1,0 +1,122 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Labeling</title>
+    <script>
+        let recording = false;
+
+        function sendLabel(label) {
+            fetch(`/label/${label}`)
+                .then(response => response.json())
+                .then(data => {
+                    console.log(data.status);
+                    recording = true;
+                    updateUI();
+                })
+                .catch(error => console.error("Error:", error));
+        }
+
+        function stopRecording() {
+            fetch(`/stop`)
+                .then(response => response.json())
+                .then(data => {
+                    console.log(data.status);
+                    showOverlay();  // Block actions silently
+                    recording = false;
+                    setTimeout(() => {
+                        hideOverlay();
+                        updateUI();
+                    }, 3200); // Wait for the current sample (3s + small buffer)
+                })
+                .catch(error => console.error("Error:", error));
+        }
+
+        function updateUI() {
+            const labelButtons = document.querySelectorAll(".label-button");
+            const stopButton = document.getElementById("stopButton");
+
+            labelButtons.forEach(button => {
+                button.style.display = recording ? "none" : "block";
+            });
+
+            stopButton.style.display = recording ? "block" : "none";
+        }
+
+        function showOverlay() {
+            document.getElementById("overlay").style.display = "block";
+        }
+
+        function hideOverlay() {
+            document.getElementById("overlay").style.display = "none";
+        }
+
+        window.onload = updateUI;
+    </script>
+
+    <style>
+        body {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            height: 100vh;
+            gap: 20px;
+            background-color: #f0f0f0;
+            font-family: Arial, sans-serif;
+        }
+
+        button {
+            font-size: 24px;
+            padding: 20px 40px;
+            border: none;
+            background-color: #007bff;
+            color: white;
+            border-radius: 10px;
+            cursor: pointer;
+            transition: background-color 0.2s;
+        }
+
+        button:hover {
+            background-color: #0056b3;
+        }
+
+        button:active {
+            background-color: #003d82;
+        }
+
+        #stopButton {
+            background-color: red;
+            display: none;
+        }
+
+        #stopButton:hover {
+            background-color: darkred;
+        }
+
+        /* Invisible overlay */
+        #overlay {
+            display: none;  /* Hidden by default */
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(0, 0, 0, 0.2);  /* Slight transparent black */
+            z-index: 999;
+            pointer-events: all;  /* Block all clicks */
+        }
+    </style>
+</head>
+<body>
+    <button class="label-button" onclick="sendLabel('grass')">Grass</button>
+    <button class="label-button" onclick="sendLabel('gravel')">Gravel</button>
+    <button class="label-button" onclick="sendLabel('concrete')">Concrete</button>
+
+    <button id="stopButton" onclick="stopRecording()">Stop recording</button>
+
+    <!-- Invisible overlay to block clicks -->
+    <div id="overlay"></div>
+</body>
+</html>
