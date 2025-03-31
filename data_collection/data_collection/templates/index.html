@@ -7,6 +7,7 @@
     <script>
         let recording = false;
 
+        #GET send request to server ex: /label/grass
         function sendLabel(label) {
             fetch(`/label/${label}`)
                 .then(response => response.json())
@@ -17,7 +18,7 @@
                 })
                 .catch(error => console.error("Error:", error));
         }
-
+        #GET
         function stopRecording() {
             fetch(`/stop`)
                 .then(response => response.json())
