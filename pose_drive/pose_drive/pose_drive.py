@@ -11,15 +11,18 @@ class PoseDrive(Node):
 
     def __init__(self):
         super().__init__('motorController')
-        self.subscriber = self.create_subscription(String, 'humanpose', self.motorControl, 10)
+
         self.drive_publisher = self.create_publisher(RemoteDriverDriveCommand, '/hqv_mower/remote_driver/drive', 100)
+
         self.app = Flask(__name__)
+        self.command = ""
 
         @self.app.route('/command', methods=['POST'])
         def receive_message():
             # Get the message from the POST request
-            command = request.json.get('command')  # Match the key used in the client
-            print(f"Received command: {command}")
+            self.command = request.json.get('command')  # Match the key used in the client
+            print(f"Received command: {self.command}")
+            self.motorControl(self.command)
             
             return {"status": "success", "message": "Message received"}, 200
         
@@ -28,29 +31,28 @@ class PoseDrive(Node):
         flask_thread.start()
 
     def run_flask(self):
-        """Function to run the Flask app."""
         self.app.run(debug=False, host='0.0.0.0', port=5000)
 
     def motorControl(self, msg): #Inspiration from the provided remote_drive_node.py
-        if msg.data == "left":
+        if self.command == "left":
             msg = RemoteDriverDriveCommand()
             msg.header.stamp = self.get_clock().now().to_msg()
             msg.speed = 0.33
             msg.steering = 2.0
             self.drive_publisher.publish(msg)
-        elif msg.data == "right":
+        elif self.command == "right":
             msg = RemoteDriverDriveCommand()
             msg.header.stamp = self.get_clock().now().to_msg()
             msg.speed = 0.33
             msg.steering = -2.0
             self.drive_publisher.publish(msg)
-        elif msg.data == "forward":
+        elif self.command == "closedhand":
             msg = RemoteDriverDriveCommand()
             msg.header.stamp = self.get_clock().now().to_msg()
             msg.speed = 0.33
             msg.steering = 0.0
             self.drive_publisher.publish(msg)
-        elif msg.data == "backward":
+        elif self.command == "openhand":
             msg = RemoteDriverDriveCommand()
             msg.header.stamp = self.get_clock().now().to_msg()
             msg.speed = -0.33
