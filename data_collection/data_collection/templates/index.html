@@ -7,9 +7,8 @@
     <script>
         let recording = false;
 
-        #send request to server ex: /label/grass
         function sendLabel(label) {
-            fetch(`/label/${label}`)
+            fetch(`/label/${label.replace(' ', '_').toLowerCase()}`)
                 .then(response => response.json())
                 .then(data => {
                     console.log(data.status);
@@ -18,17 +17,18 @@
                 })
                 .catch(error => console.error("Error:", error));
         }
+
         function stopRecording() {
             fetch(`/stop`)
                 .then(response => response.json())
                 .then(data => {
                     console.log(data.status);
-                    showOverlay();  // Block actions silently
+                    showOverlay();
                     recording = false;
                     setTimeout(() => {
                         hideOverlay();
                         updateUI();
-                    }, 3200); // Wait for the current sample (3s + small buffer)
+                    }, 3200);
                 })
                 .catch(error => console.error("Error:", error));
         }
@@ -95,28 +95,28 @@
             background-color: darkred;
         }
 
-        /* Invisible overlay */
         #overlay {
-            display: none;  /* Hidden by default */
+            display: none;
             position: fixed;
             top: 0;
             left: 0;
             width: 100%;
             height: 100%;
-            background: rgba(0, 0, 0, 0.2);  /* Slight transparent black */
+            background: rgba(0, 0, 0, 0.2);
             z-index: 999;
-            pointer-events: all;  /* Block all clicks */
+            pointer-events: all;
         }
     </style>
 </head>
 <body>
     <button class="label-button" onclick="sendLabel('grass')">Grass</button>
     <button class="label-button" onclick="sendLabel('gravel')">Gravel</button>
-    <button class="label-button" onclick="sendLabel('concrete')">Concrete</button>
+    <button class="label-button" onclick="sendLabel('asphalt')">Asphalt</button>
+    <button class="label-button" onclick="sendLabel('parking lot')">Parking Lot</button>
+    <button class="label-button" onclick="sendLabel('stones')">Stones</button>
 
     <button id="stopButton" onclick="stopRecording()">Stop recording</button>
 
-    <!-- Invisible overlay to block clicks -->
     <div id="overlay"></div>
 </body>
 </html>

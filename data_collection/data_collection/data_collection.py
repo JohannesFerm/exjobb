@@ -9,6 +9,8 @@ import wave
 import os
 import numpy as np
 from hqv_public_interface.msg import MowerImu
+import datetime 
+
 
 class DataCollectorNode(Node):
     def __init__(self):
@@ -61,7 +63,8 @@ class DataCollectorNode(Node):
 
         sample = 0
 
-        dirPath = f"dataset/{label}"
+        dateStr = datetime.datetime.now().strftime("%Y-%m-%d")
+        dirPath = f"dataset/{dateStr}/{label}"
         os.makedirs(dirPath, exist_ok=True) 
 
         #Record audio and imu data
