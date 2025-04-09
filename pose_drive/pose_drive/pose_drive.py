@@ -2,9 +2,14 @@ import rclpy
 from rclpy.node import Node
 from flask import Flask, request
 import threading
+import time
 
 from std_msgs.msg import String
 from hqv_public_interface.msg import RemoteDriverDriveCommand
+from hqv_public_interface.msg import MowerMowerError
+from hqv_public_interface.msg import MowerAppCommand
+from hqv_public_interface.msg import MowerMowerState
+from hqv_public_interface.msg import MowerMowerMode
 
 
 class PoseDrive(Node):
@@ -13,7 +18,7 @@ class PoseDrive(Node):
         super().__init__('motorController')
 
         self.drive_publisher = self.create_publisher(RemoteDriverDriveCommand, '/hqv_mower/remote_driver/drive', 100)
-
+        
         self.app = Flask(__name__)
         self.command = ""
         self.speed = 0.33
@@ -42,7 +47,7 @@ class PoseDrive(Node):
         flask_thread.start()
 
     def run_flask(self):
-        self.app.run(debug=False, host='0.0.0.0', port=5000)
+        self.app.run(debug=False, host='0.0.0.0', port=4000)
 
     def motorControl(self): #Inspiration from the provided remote_drive_node.py
         if self.command == "left":

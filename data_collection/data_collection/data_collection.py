@@ -74,8 +74,8 @@ class DataCollectorNode(Node):
         RATE = 44100
         CHUNK = 512
 
-        dateStr = datetime.datetime.now().strftime("%Y-%m-%d")
-        self.sampleFolder = f"dataset/{dateStr}/{label}"
+        sampleId = f"sample_{int(time.time())}"
+        self.sampleFolder = f"dataset/{label}/{sampleId}"
         os.makedirs(self.sampleFolder, exist_ok=True)
 
         audioPath = os.path.join(self.sampleFolder, f"audio{time.time()}.wav")
