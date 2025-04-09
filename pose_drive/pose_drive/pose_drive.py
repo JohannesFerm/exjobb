@@ -6,11 +6,6 @@ import time
 
 from std_msgs.msg import String
 from hqv_public_interface.msg import RemoteDriverDriveCommand
-from hqv_public_interface.msg import MowerMowerError
-from hqv_public_interface.msg import MowerAppCommand
-from hqv_public_interface.msg import MowerMowerState
-from hqv_public_interface.msg import MowerMowerMode
-
 
 class PoseDrive(Node):
 
@@ -21,7 +16,7 @@ class PoseDrive(Node):
         
         self.app = Flask(__name__)
         self.command = ""
-        self.speed = 0.33
+        self.speed = 0.6
 
         @self.app.route('/command', methods=['POST'])
         def receive_message():
@@ -51,15 +46,16 @@ class PoseDrive(Node):
 
     def motorControl(self): #Inspiration from the provided remote_drive_node.py
         if self.command == "left":
+            print("HEJ")
             msg = RemoteDriverDriveCommand()
             msg.header.stamp = self.get_clock().now().to_msg()
-            msg.speed = self.speed
+            msg.speed = 0.33
             msg.steering = 2.0
             self.drive_publisher.publish(msg)
         elif self.command == "right":
             msg = RemoteDriverDriveCommand()
             msg.header.stamp = self.get_clock().now().to_msg()
-            msg.speed = self.speed
+            msg.speed = 0.33
             msg.steering = -2.0
             self.drive_publisher.publish(msg)
         elif self.command == "closedhand":
