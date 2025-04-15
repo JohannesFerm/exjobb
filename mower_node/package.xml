@@ -1,10 +1,10 @@
 <?xml version="1.0"?>
 <?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
 <package format="3">
-  <name>data_collection</name>
+  <name>mower_node</name>
   <version>0.0.0</version>
   <description>Node for data collection</description>
-  <maintainer email="johannesferm1@gmail.com">marcus</maintainer>
+  <maintainer email="johannesferm1@gmail.com">Johannes</maintainer>
   <license>TODO: License declaration</license>
 
   <depend>rclpy</depend>

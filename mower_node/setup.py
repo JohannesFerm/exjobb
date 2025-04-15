@@ -2,7 +2,7 @@ from setuptools import setup
 import os
 from glob import glob
 
-package_name = "data_collection"
+package_name = "mower_node"
 
 setup(
     name=package_name,
@@ -21,12 +21,12 @@ setup(
     zip_safe=True,
     maintainer="Johannes",
     maintainer_email="johannesferm1@gmail.com",
-    description="Node for collecting data",
+    description="Node for collecting data, testing the model and displaying a map",
     license="TODO: License declaration",
     tests_require=["pytest"],
     entry_points={
         "console_scripts": [
-            "data_collection = data_collection.data_collection:main"
+            "mower_node = mower_node.mower_node:main"
         ],
     },
 )

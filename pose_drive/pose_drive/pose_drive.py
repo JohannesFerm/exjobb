@@ -16,7 +16,7 @@ class PoseDrive(Node):
         
         self.app = Flask(__name__)
         self.command = ""
-        self.speed = 0.6
+        self.speed = 0.5
 
         @self.app.route('/command', methods=['POST'])
         def receive_message():
