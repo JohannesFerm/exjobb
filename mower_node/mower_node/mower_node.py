@@ -13,6 +13,9 @@ from hqv_public_interface.msg import MowerGnssPosition
 import datetime 
 import csv
 import torch
+from mower_node.model import MultimodalModel
+import os
+import librosa
 
 
 class MowerNode(Node):
@@ -41,7 +44,7 @@ class MowerNode(Node):
         self.prediction = None
         self.testing = False
         self.model = None
-        self.imuBuffer = []
+        self.imuBuffer =  [[0.0, 0.0, 0.0] for _ in range(10)]
 
         #Setup flask server stuff
         self.app = Flask(__name__, template_folder="templates")
@@ -99,6 +102,7 @@ class MowerNode(Node):
                 self.imuFile.write(f"{currentTime},{self.orientation[0]},{self.orientation[1]},{self.orientation[2]}\n")
             elif self.testing:
                 self.imuBuffer.append(self.orientation)
+                self.imuBuffer = self.imuBuffer[1:]
 
     #Collect GPS data, 1 second intervals (decided by the topic)
     def GPSCallback(self, msg):
@@ -163,11 +167,19 @@ class MowerNode(Node):
         self.gpsFile = None
     
     def test(self):
-    
+
+        #Load the model
         if self.model is None:
-            self.model = torch.jit.load("models/multimodalNet.pt")
+
+            #Find the weights
+            model_path = "models/model_weights.pth"
+            
+            NUM_CLASSES = 4 #Should be 5
+            self.model = MultimodalModel(numClasses=NUM_CLASSES)
+            self.model.load_state_dict(torch.load(model_path, map_location=torch.device('cpu')))
             self.model.eval()
 
+        #Setup for audio
         audio = pyaudio.PyAudio()
         FORMAT = pyaudio.paInt16
         CHANNELS = 1
@@ -175,9 +187,8 @@ class MowerNode(Node):
         CHUNK = 512
         RECORD_SECONDS = 2
         while self.testing:
-            print(self.imuBuffer)
-            print("HEJ")
 
+            start = time.time()
             #Record audio (2 seconds)
             frames = []
             stream = audio.open(format=FORMAT, channels=CHANNELS,
@@ -187,8 +198,30 @@ class MowerNode(Node):
             for i in range(0, int(RATE / CHUNK * RECORD_SECONDS)):
                 data = stream.read(CHUNK)
                 frames.append(data)
+
+            stream.stop_stream()
+            stream.close()
+
+            #Preprocess audio, convert to spectrogram
+            soundClip = np.frombuffer(b''.join(frames), dtype=np.int16).astype(np.float32) / 32768.0
+            soundClip = librosa.feature.melspectrogram(y=soundClip, sr=RATE, n_fft=2048, hop_length=512, n_mels=128)
+            soundClip = librosa.power_to_db(soundClip, ref=np.max)
+
+            #Tensors for the model
+            audioTensor = torch.tensor(soundClip, dtype=torch.float32).unsqueeze(0).unsqueeze(1)
+            imuTensor = torch.tensor(np.stack(self.imuBuffer), dtype=torch.float32).unsqueeze(0)
             
-             
+            output = self.model.forward(audioTensor, imuTensor)
+
+            _, pred = torch.max(output, 1)
+            self.prediction = pred.item() #Set output on the server
+
+            stop = time.time()
+            print(f"TIME: {start - stop}")
+        
+        audio.terminate()
+        self.imuBuffer =  [[0.0, 0.0, 0.0] for _ in range(10)]
+        self.prediction = None   
 
 def main(args=None):
     rclpy.init(args=args)
