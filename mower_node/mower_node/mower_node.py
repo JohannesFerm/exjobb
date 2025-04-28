@@ -17,7 +17,7 @@ from mower_node.model import MultimodalModel
 import os
 import librosa
 import contextlib
-import sys
+from geopy.distance import geodesic
 
 #Helper to avoid ALSA warnings
 @contextlib.contextmanager
@@ -53,7 +53,7 @@ class MowerNode(Node):
         #For GPS
         self.gpsSub = self.create_subscription(MowerGnssPosition, '/hqv_mower/gnss/position', self.GPSCallback, 10)
         self.gpsFile = None
-        self.pos = np.zeros(2)
+        self.pos = None
         
         self.sampleFolder = None
 
@@ -63,21 +63,25 @@ class MowerNode(Node):
         self.model = None
         self.imuBuffer =  [[0.0, 0.0, 0.0] for _ in range(10)]
 
+        #For map building
+        self.cellWidth = 0.54 #Mowers width in meters
+        self.cellHeight = 0.75 #Mowers height in meters
+        self.MapDim = 50
+        self.startPos = None
+        self.mapBuilding = False
+
         #Load the model
-        if self.model is None:
-            #Find the weights
-            model_path = "models/model_weights.pth"
-            
-            NUM_CLASSES = 4 #Should be 5
-            self.model = MultimodalModel(numClasses=NUM_CLASSES)
-            self.model.load_state_dict(torch.load(model_path, map_location=torch.device('cpu')))
-            self.model.eval()
+        model_path = "models/model_weights.pth"
+        NUM_CLASSES = 4 #Should be 5
+        self.model = MultimodalModel(numClasses=NUM_CLASSES)
+        self.model.load_state_dict(torch.load(model_path, map_location=torch.device('cpu')))
+        self.model.eval()
 
         #Librosa uses numba, dummy call to avoid first (real) call taking longer
         dummyAudio = np.zeros(44100 * 2, dtype=np.float32) 
         _ = librosa.feature.melspectrogram(y=dummyAudio, sr=44100, n_fft=2048, hop_length=512, n_mels=128)
 
-        #Setup flask server stuff
+        #Setup flask server
         self.app = Flask(__name__, template_folder="templates")
 
         @self.app.route("/")
@@ -104,7 +108,7 @@ class MowerNode(Node):
         @self.app.route("/start-test", methods=['GET'])
         def startTest():
             self.testing = True
-            threading.Thread(target=self.test, daemon=True).start()
+            threading.Thread(target=self.runModel, daemon=True).start()
             return jsonify({"status": "Test started"})
         
         #For stopping the testing
@@ -120,6 +124,22 @@ class MowerNode(Node):
                 return jsonify({"prediction": self.prediction, "status": "testing"})
             else:
                 return jsonify({"prediction": "Not testing", "status": "idle"})
+
+        #For map building
+        @self.app.route("/start-map", methods = ["GET"])
+        def startMapBuilding():
+            self.mapBuilding = True
+            self.testing = True
+            threading.Thread(target=self.runModel, daemon=True).start()
+            print("STARTING")
+            return jsonify({"status": "Map building started"})
+        
+        #For stopping map building
+        @self.app.route("/stop-map",  methods = ["GET"])
+        def stopMapBuilding():
+            self.mapBuilding = False
+            self.testing = False
+            return jsonify({"status": "Map building stopped"})
 
         flask_thread = threading.Thread(target=self.run_flask, daemon=True)
         flask_thread.start()
@@ -141,6 +161,8 @@ class MowerNode(Node):
     def GPSCallback(self, msg):
         if self.gpsFile:
             self.gpsFile.write(f"{time.time()},{msg.latitude},{msg.longitude}\n")
+        elif self.mapBuilding:
+            self.pos = [msg.latitude, msg.longitude]
 
     def run_flask(self):
         self.app.run(host="0.0.0.0", port=5000, debug=False, use_reloader=False)
@@ -197,7 +219,7 @@ class MowerNode(Node):
         self.gpsFile = None
     
     #Function for testing the model
-    def test(self):
+    def runModel(self):
         with suppressStderr():
             audio = pyaudio.PyAudio()
 
@@ -209,11 +231,11 @@ class MowerNode(Node):
             #Record audio
             frames = []            
             for i in range(0, int(self.RATE / self.CHUNK * self.RECORD_SECONDS)):
-                data = stream.read(self.CHUNK)
+                data = stream.read(self.CHUNK) #, exception_on_overflow=False)
                 frames.append(data)
 
             #Start a thread for inference
-            threading.Thread(target=self.infer, args=(frames,)).start()
+            threading.Thread(target=self.useModel, args=(frames,)).start()
         
         #Clean up
         stream.stop_stream()
@@ -221,12 +243,20 @@ class MowerNode(Node):
         audio.terminate()
         self.imuBuffer =  [[0.0, 0.0, 0.0] for _ in range(10)]
         self.prediction = None   
-    
-    #Function for doing inference
-    def infer(self, frames):
-        RATE = 44100
+
+    #Function for doing inference and map building
+    def useModel(self, frames):
+
+        #Set start position for map if haven't
+        if self.mapBuilding:
+            if self.startPos is None:
+                self.startPos = self.pos
+
+            currentPos = self.pos #Use this line so that the GPS position isn't affected (updated) by the inference taking half a second
+                                    #If the timing is bad it might happen that the GPS position from the callback belongs to the next clip without this line
+
         soundClip = np.frombuffer(b''.join(frames), dtype=np.int16).astype(np.float32) / 32768.0
-        soundClip = librosa.feature.melspectrogram(y=soundClip, sr=RATE, n_fft=2048, hop_length=512, n_mels=128)
+        soundClip = librosa.feature.melspectrogram(y=soundClip, sr=self.RATE, n_fft=2048, hop_length=512, n_mels=128)
         soundClip = librosa.power_to_db(soundClip, ref=np.max)
 
         #Tensors for the model
@@ -238,6 +268,14 @@ class MowerNode(Node):
         _, pred = torch.max(output, 1)
         self.prediction = pred.item() #Set output on the server
 
+        if self.mapBuilding:
+            self.buildMap(currentPos, self.prediction)
+
+    #Function that builds the map based on positions and model output
+    def buildMap(self, pos, pred):
+        xDiff = geodesic((self.startPos[0], self.startPos[1]), (self.startPos[0], pos[1])).meters
+        yDiff = geodesic((self.startPos[0], self.startPos[1]), (pos[0], self.startPos[1])).meters
+        
 def main(args=None):
     rclpy.init(args=args)
     node = MowerNode()

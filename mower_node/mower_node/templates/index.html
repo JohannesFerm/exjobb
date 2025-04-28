@@ -87,21 +87,55 @@
     }
 
     function stopTestModel() {
+      showOverlay(); 
       fetch('/stop-test')
         .then(() => {
           clearInterval(testInterval);
           testInterval = null;
-          document.getElementById("placeholderText").innerText = "Loading...";
-          navigateTo('home');
+          setTimeout(() => {
+            document.getElementById("placeholderText").innerText = "Loading...";
+            hideOverlay(); 
+            navigateTo('home');
+          }, 3200);
         })
         .catch((err) => {
           console.error(err);
           clearInterval(testInterval);
           testInterval = null;
-          document.getElementById("placeholderText").innerText = "Loading...";
-          navigateTo('home');
+          setTimeout(() => {
+            document.getElementById("placeholderText").innerText = "Loading...";
+            hideOverlay();
+            navigateTo('home');
+          }, 3200);
         });
     }
+
+    function startMapBuilding() {
+      fetch('/start-map')
+        .then(() => {
+          navigateTo('map')
+        })
+        .catch((err) => console.error(err));
+    }
+
+    function stopMapBuilding() {
+      showOverlay();
+      fetch('/stop-map')
+        .then(() => {
+          setTimeout(() => {
+            hideOverlay();
+            navigateTo('home');
+          }, 3200);
+        })
+        .catch((err) => {
+          console.error("Error stopping map building:", err);
+          setTimeout(() => {
+            hideOverlay();
+            navigateTo('home');
+          }, 3200);
+        });
+    }
+
 
     function updateUI() {
       const labelButtons = document.querySelectorAll(".label-button");
@@ -193,7 +227,7 @@
   <div id="home" class="view">
     <button onclick="navigateTo('collect')">Collect Data</button>
     <button onclick="triggerTestModel()">Test Model</button>
-    <button onclick="navigateTo('map')">Map</button>
+    <button onclick="startMapBuilding()">Map</button>
   </div>
 
   <!-- Collect Data Page -->
@@ -215,7 +249,7 @@
 
   <!-- Map Page -->
   <div id="mapPage" class="view">
-    <button id="backButtonMap" onclick="navigateTo('home')">Back</button>
+    <button id="backButtonMap" onclick="stopMapBuilding()">Back</button>
   </div>
 
   <div id="overlay"></div>
