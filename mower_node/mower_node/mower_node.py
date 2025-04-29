@@ -133,7 +133,6 @@ class MowerNode(Node):
             self.mapBuilding = True
             self.testing = True
             threading.Thread(target=self.runModel, daemon=True).start()
-            print("STARTING")
             return jsonify({"status": "Map building started"})
         
         #For stopping map building
@@ -293,9 +292,8 @@ class MowerNode(Node):
         xIndex = int(round(xDiff / self.cellWidth + self.mapDim // 2))
         yIndex = int(round(yDiff / self.cellHeight + self.mapDim // 2))
 
-        print([xIndex, yIndex])
-
-        self.map[xIndex, yIndex] = pred
+        if 0 <= xIndex < self.mapDim and 0 <= yIndex < self.mapDim:
+            self.map[xIndex, yIndex] = pred
 
 def main(args=None):
     rclpy.init(args=args)
