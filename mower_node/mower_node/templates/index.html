@@ -4,18 +4,117 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
   <title>Labeling</title>
+  <style>
+    html, body {
+      margin: 0;
+      padding: 0;
+      font-family: Arial, sans-serif;
+      background-color: #f0f0f0;
+      height: 100%;
+      overflow: hidden;
+    }
+
+    .view {
+      display: none;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      height: 100vh;
+      box-sizing: border-box;
+      gap: 20px;
+      padding: 10px;
+    }
+
+    #home {
+      display: flex;
+    }
+
+    button {
+      font-size: 20px;
+      padding: 10px 20px;
+      border: none;
+      background-color: #007bff;
+      color: white;
+      border-radius: 10px;
+      cursor: pointer;
+      transition: background-color 0.2s;
+    }
+
+    button:hover {
+      background-color: #0056b3;
+    }
+
+    button:active {
+      background-color: #003d82;
+    }
+
+    #stopButton {
+      background-color: red;
+      display: none;
+    }
+
+    #stopButton:hover {
+      background-color: darkred;
+    }
+
+    #overlay {
+      display: none;
+      position: fixed;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+      background: rgba(0, 0, 0, 0.2);
+      z-index: 999;
+    }
+
+    #mapPage {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      height: 100vh;
+      justify-content: space-between;
+      padding: 10px;
+      box-sizing: border-box;
+    }
+
+    #mapContainer {
+      display: grid;
+      width: 90vmin;
+      height: 90vmin;
+      max-height: 80vmin;
+      grid-template-columns: repeat(50, 1fr);
+      grid-template-rows: repeat(50, 1fr);
+      gap: 1px;
+    }
+
+    .map-cell {
+      width: 100%;
+      height: 100%;
+    }
+
+    .map--1 { background-color: white; }
+    .map-0  { background-color: green; }
+    .map-1  { background-color: gray; }
+    .map-2  { background-color: black; }
+    .map-3  { background-color: yellow; }
+    .map-4  { background-color: brown; }
+
+    #backButtonMap {
+      margin-top: 10px;
+    }
+  </style>
   <script>
     let recording = false;
     let testInterval = null;
+    let mapInterval = null;
 
     function navigateTo(section) {
-      // Hide all views
       document.getElementById("home").style.display = "none";
       document.getElementById("collectData").style.display = "none";
       document.getElementById("testModel").style.display = "none";
       document.getElementById("mapPage").style.display = "none";
 
-      // Show appropriate section
       if (section === "collect") {
         document.getElementById("collectData").style.display = "flex";
       } else if (section === "test") {
@@ -23,6 +122,7 @@
         startPollingPrediction();
       } else if (section === "map") {
         document.getElementById("mapPage").style.display = "flex";
+        startPollingMap();
       } else {
         document.getElementById("home").style.display = "flex";
       }
@@ -122,6 +222,8 @@
       showOverlay();
       fetch('/stop-map')
         .then(() => {
+          clearInterval(mapInterval);
+          mapInterval = null;
           setTimeout(() => {
             hideOverlay();
             navigateTo('home');
@@ -129,6 +231,8 @@
         })
         .catch((err) => {
           console.error("Error stopping map building:", err);
+          clearInterval(mapInterval);
+          mapInterval = null;
           setTimeout(() => {
             hideOverlay();
             navigateTo('home');
@@ -136,6 +240,33 @@
         });
     }
 
+    function startPollingMap() {
+      if (mapInterval !== null) return;
+
+      const container = document.getElementById("mapContainer");
+
+      mapInterval = setInterval(() => {
+        fetch('/map')
+          .then(response => response.json())
+          .then(data => {
+            container.innerHTML = "";
+            data.map.forEach(row => {
+              row.forEach(value => {
+                const cell = document.createElement("div");
+                cell.classList.add("map-cell");
+                const className = value === -1 ? 'map--1' : `map-${value}`;
+                cell.classList.add(className);
+                container.appendChild(cell);
+              });
+            });
+          })
+          .catch(err => {
+            console.error("Map fetch failed:", err);
+            clearInterval(mapInterval);
+            mapInterval = null;
+          });
+      }, 1000);
+    }
 
     function updateUI() {
       const labelButtons = document.querySelectorAll(".label-button");
@@ -160,77 +291,14 @@
 
     window.onload = updateUI;
   </script>
-
-  <style>
-    body {
-      margin: 0;
-      padding: 0;
-      font-family: Arial, sans-serif;
-      background-color: #f0f0f0;
-    }
-
-    .view {
-      display: none;
-      flex-direction: column;
-      align-items: center;
-      justify-content: center;
-      height: 100vh;
-      gap: 20px;
-    }
-
-    #home {
-      display: flex;
-    }
-
-    button {
-      font-size: 24px;
-      padding: 20px 40px;
-      border: none;
-      background-color: #007bff;
-      color: white;
-      border-radius: 10px;
-      cursor: pointer;
-      transition: background-color 0.2s;
-    }
-
-    button:hover {
-      background-color: #0056b3;
-    }
-
-    button:active {
-      background-color: #003d82;
-    }
-
-    #stopButton {
-      background-color: red;
-      display: none;
-    }
-
-    #stopButton:hover {
-      background-color: darkred;
-    }
-
-    #overlay {
-      display: none;
-      position: fixed;
-      top: 0;
-      left: 0;
-      width: 100%;
-      height: 100%;
-      background: rgba(0, 0, 0, 0.2);
-      z-index: 999;
-    }
-  </style>
 </head>
 <body>
-  <!-- Home Page -->
   <div id="home" class="view">
     <button onclick="navigateTo('collect')">Collect Data</button>
     <button onclick="triggerTestModel()">Test Model</button>
     <button onclick="startMapBuilding()">Map</button>
   </div>
 
-  <!-- Collect Data Page -->
   <div id="collectData" class="view">
     <button class="label-button" onclick="sendLabel('grass')">Grass</button>
     <button class="label-button" onclick="sendLabel('gravel')">Gravel</button>
@@ -241,14 +309,13 @@
     <button id="backButtonCollect" onclick="navigateTo('home')">Back</button>
   </div>
 
-  <!-- Test Model Page -->
   <div id="testModel" class="view">
     <h1 id="placeholderText">Loading...</h1>
     <button id="stopTestButton" onclick="stopTestModel()">Stop Test</button>
   </div>
 
-  <!-- Map Page -->
   <div id="mapPage" class="view">
+    <div id="mapContainer"></div>
     <button id="backButtonMap" onclick="stopMapBuilding()">Back</button>
   </div>
 

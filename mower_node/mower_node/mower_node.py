@@ -66,9 +66,11 @@ class MowerNode(Node):
         #For map building
         self.cellWidth = 0.54 #Mowers width in meters
         self.cellHeight = 0.75 #Mowers height in meters
-        self.MapDim = 50
+        self.mapDim = 50
         self.startPos = None
         self.mapBuilding = False
+        self.map = np.full((self.mapDim, self.mapDim), fill_value=-1, dtype=int)
+
 
         #Load the model
         model_path = "models/model_weights.pth"
@@ -140,6 +142,12 @@ class MowerNode(Node):
             self.mapBuilding = False
             self.testing = False
             return jsonify({"status": "Map building stopped"})
+
+        @self.app.route("/map", methods=["GET"])
+        def getMap():
+            processedMap = self.map.tolist()
+            return jsonify({"map": processedMap})
+
 
         flask_thread = threading.Thread(target=self.run_flask, daemon=True)
         flask_thread.start()
@@ -231,7 +239,7 @@ class MowerNode(Node):
             #Record audio
             frames = []            
             for i in range(0, int(self.RATE / self.CHUNK * self.RECORD_SECONDS)):
-                data = stream.read(self.CHUNK) #, exception_on_overflow=False)
+                data = stream.read(self.CHUNK, exception_on_overflow=False)
                 frames.append(data)
 
             #Start a thread for inference
@@ -268,14 +276,27 @@ class MowerNode(Node):
         _, pred = torch.max(output, 1)
         self.prediction = pred.item() #Set output on the server
 
-        if self.mapBuilding:
+        if self.mapBuilding and self.pos is not None:
             self.buildMap(currentPos, self.prediction)
 
     #Function that builds the map based on positions and model output
     def buildMap(self, pos, pred):
+        #Get the difference between starting point and current point in meters
         xDiff = geodesic((self.startPos[0], self.startPos[1]), (self.startPos[0], pos[1])).meters
         yDiff = geodesic((self.startPos[0], self.startPos[1]), (pos[0], self.startPos[1])).meters
-        
+        xSign = 1 if pos[1] >= self.startPos[1] else -1
+        ySign = 1 if pos[0] >= self.startPos[0] else -1
+        xDiff *= xSign
+        yDiff *= ySign
+
+        #Get the index of current position, treat the middle of the grid as origin
+        xIndex = int(round(xDiff / self.cellWidth + self.mapDim // 2))
+        yIndex = int(round(yDiff / self.cellHeight + self.mapDim // 2))
+
+        print([xIndex, yIndex])
+
+        self.map[xIndex, yIndex] = pred
+
 def main(args=None):
     rclpy.init(args=args)
     node = MowerNode()
