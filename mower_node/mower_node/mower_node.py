@@ -10,6 +10,8 @@ import os
 import numpy as np
 from hqv_public_interface.msg import MowerImu
 from hqv_public_interface.msg import MowerGnssPosition
+from hqv_public_interface.msg import MowerWheelSpeed
+from geopy.distance import distance
 import datetime 
 import csv
 import torch
@@ -59,6 +61,7 @@ class MowerNode(Node):
 
         #For testing the model
         self.prediction = None
+        self.predText = None
         self.testing = False
         self.model = None
         self.imuBuffer =  [[0.0, 0.0, 0.0] for _ in range(10)]
@@ -69,19 +72,26 @@ class MowerNode(Node):
         self.mapDim = 50
         self.startPos = None
         self.mapBuilding = False
-        self.map = np.full((self.mapDim, self.mapDim), fill_value=-1, dtype=int)
-
+        self.map = [[{"lat": None, "lon": None, "prediction": -1} for _ in range(self.mapDim)] for _ in range(self.mapDim)]
 
         #Load the model
-        model_path = "models/model_weights.pth"
-        NUM_CLASSES = 4 #Should be 5
+        modelPath = "models/model_with_labels.pth"
+        checkpoint = torch.load(modelPath, map_location=torch.device('cpu'))
+        NUM_CLASSES = len(checkpoint['label_mapping'])
         self.model = MultimodalModel(numClasses=NUM_CLASSES)
-        self.model.load_state_dict(torch.load(model_path, map_location=torch.device('cpu')))
+        self.model.load_state_dict(checkpoint['model_state_dict'])
         self.model.eval()
+        self.labelMapping = checkpoint['label_mapping']
 
         #Librosa uses numba, dummy call to avoid first (real) call taking longer
         dummyAudio = np.zeros(44100 * 2, dtype=np.float32) 
         _ = librosa.feature.melspectrogram(y=dummyAudio, sr=44100, n_fft=2048, hop_length=512, n_mels=128)
+
+        #For wheel speed
+        self.wheel0Sub = self.create_subscription(MowerWheelSpeed, '/hqv_mower/wheel0/speed', self.wheel0Callback, 10)
+        self.wheel1Sub = self.create_subscription(MowerWheelSpeed, '/hqv_mower/wheel1/speed', self.wheel1Callback, 10)
+        self.wheel0buffer = []
+        self.wheel1buffer = []
 
         #Setup flask server
         self.app = Flask(__name__, template_folder="templates")
@@ -123,7 +133,7 @@ class MowerNode(Node):
         @self.app.route("/prediction", methods=["GET"])
         def getPrediction():
             if self.testing:
-                return jsonify({"prediction": self.prediction, "status": "testing"})
+                return jsonify({"prediction": self.predText, "status": "testing"})
             else:
                 return jsonify({"prediction": "Not testing", "status": "idle"})
 
@@ -132,6 +142,9 @@ class MowerNode(Node):
         def startMapBuilding():
             self.mapBuilding = True
             self.testing = True
+            if self.startPos is None:
+                self.startPos = self.pos
+                self.createMap(self.startPos)
             threading.Thread(target=self.runModel, daemon=True).start()
             return jsonify({"status": "Map building started"})
         
@@ -144,7 +157,13 @@ class MowerNode(Node):
 
         @self.app.route("/map", methods=["GET"])
         def getMap():
-            processedMap = self.map.tolist()
+            processedMap = []
+            for i in range(self.mapDim):
+                row = []  
+                for j in range(self.mapDim):
+                    prediction = self.map[i][j]["prediction"] if self.map[i][j]["prediction"] != -1 else -1
+                    row.append(prediction)  
+                processedMap.append(row) 
             return jsonify({"map": processedMap})
 
 
@@ -168,8 +187,15 @@ class MowerNode(Node):
     def GPSCallback(self, msg):
         if self.gpsFile:
             self.gpsFile.write(f"{time.time()},{msg.latitude},{msg.longitude}\n")
-        elif self.mapBuilding:
-            self.pos = [msg.latitude, msg.longitude]
+
+        self.pos = [msg.latitude, msg.longitude]
+
+    #Callbacks for wheel speed, 25 ms
+    def wheel0Callback(self, msg):
+        self.wheel0buffer.append(msg.speed)
+
+    def wheel1Callback(self, msg):
+        self.wheel1buffer.append(msg.speed)
 
     def run_flask(self):
         self.app.run(host="0.0.0.0", port=5000, debug=False, use_reloader=False)
@@ -181,7 +207,7 @@ class MowerNode(Node):
 
         #Define directory
         sampleId = f"sample_{int(time.time())}"
-        self.sampleFolder = f"dataset/{label}/{sampleId}"
+        self.sampleFolder = f"datasetNew/{label}/{sampleId}"
         os.makedirs(self.sampleFolder, exist_ok=True)
 
         #Define the different data files
@@ -210,7 +236,7 @@ class MowerNode(Node):
                                        rate=self.RATE, input=True,
                                        frames_per_buffer=self.CHUNK)
         while self.recording:
-            data = stream.read(self.CHUNK)
+            data = stream.read(self.CHUNK, exception_on_overflow=False)
             self.audioFile.writeframes(data)
 
         #Clean up
@@ -236,6 +262,8 @@ class MowerNode(Node):
 
         while self.testing:
             #Record audio
+            self.wheel0buffer = []
+            self.wheel1buffer = []
             frames = []            
             for i in range(0, int(self.RATE / self.CHUNK * self.RECORD_SECONDS)):
                 data = stream.read(self.CHUNK, exception_on_overflow=False)
@@ -256,11 +284,22 @@ class MowerNode(Node):
 
         #Set start position for map if haven't
         if self.mapBuilding:
-            if self.startPos is None:
-                self.startPos = self.pos
-
             currentPos = self.pos #Use this line so that the GPS position isn't affected (updated) by the inference taking half a second
                                     #If the timing is bad it might happen that the GPS position from the callback belongs to the next clip without this line
+
+        numpyWheel0 = np.array(self.wheel0buffer)
+        numpyWheel1 = np.array(self.wheel1buffer)
+
+        #Sometimes one callback gets one sample ahead of the other, clip size of arrays to smaller one
+        minLen = min(len(numpyWheel0), len(numpyWheel1))
+        numpyWheel0 = numpyWheel0[:minLen]
+        numpyWheel1 = numpyWheel1[:minLen]
+
+        notMovingForward = (numpyWheel0 <= 0.01) & (numpyWheel1 <= 0.01)
+
+        if np.sum(notMovingForward) / len(numpyWheel0) > 0.3:
+            self.predText = "Not moving properly"
+            return
 
         soundClip = np.frombuffer(b''.join(frames), dtype=np.int16).astype(np.float32) / 32768.0
         soundClip = librosa.feature.melspectrogram(y=soundClip, sr=self.RATE, n_fft=2048, hop_length=512, n_mels=128)
@@ -272,28 +311,57 @@ class MowerNode(Node):
         
         output = self.model.forward(audioTensor, imuTensor)
 
-        _, pred = torch.max(output, 1)
-        self.prediction = pred.item() #Set output on the server
+        probs = torch.softmax(output, dim=1)
+        confidence, pred = torch.max(probs, 1)
+        self.prediction = pred.item() 
+
+        if confidence.item() < 0.6:
+            self.predText = "Low confidence"
+            return
+        else:
+            self.predText = self.labelMapping[self.prediction]
 
         if self.mapBuilding and self.pos is not None:
             self.buildMap(currentPos, self.prediction)
 
-    #Function that builds the map based on positions and model output
+    #Function to add prediction to right position in the map
     def buildMap(self, pos, pred):
-        #Get the difference between starting point and current point in meters
-        xDiff = geodesic((self.startPos[0], self.startPos[1]), (self.startPos[0], pos[1])).meters
-        yDiff = geodesic((self.startPos[0], self.startPos[1]), (pos[0], self.startPos[1])).meters
-        xSign = 1 if pos[1] >= self.startPos[1] else -1
-        ySign = 1 if pos[0] >= self.startPos[0] else -1
-        xDiff *= xSign
-        yDiff *= ySign
+        closestI, closestJ = None, None
+        minDiff = float('inf') 
 
-        #Get the index of current position, treat the middle of the grid as origin
-        xIndex = int(round(xDiff / self.cellWidth + self.mapDim // 2))
-        yIndex = int(round(yDiff / self.cellHeight + self.mapDim // 2))
+        #Loop through map
+        for i in range(self.mapDim):
+            for j in range(self.mapDim):
+                cell = self.map[i][j]
+                if cell is None:
+                    continue
 
-        if 0 <= xIndex < self.mapDim and 0 <= yIndex < self.mapDim:
-            self.map[xIndex, yIndex] = pred
+                latDiff = abs(pos[0] - cell["lat"])
+                lonDiff = abs(pos[1] - cell["lon"])
+                diff = latDiff + lonDiff
+
+                #Find the cell with the most similar gps position
+                if diff < minDiff:
+                    minDiff = diff
+                    closestI, closestJ = i, j
+
+        #Insert prediction in the map
+        if closestI is not None and closestJ is not None:
+            self.map[closestI][closestJ]["prediction"] = pred
+
+    #Function to build the map with gps coordinates
+    def createMap(self, pos):
+        #Loop through whole grid
+        for i in range(self.mapDim):
+            for j in range(self.mapDim):
+                dy = (self.mapDim // 2 - i) * self.cellHeight
+                dx = (self.mapDim // 2 - j) * self.cellWidth
+
+                pointY = distance(meters=abs(dy)).destination(pos, bearing=0 if dy >= 0 else 180)
+                point = distance(meters=abs(dx)).destination(pointY, bearing=90 if dx >= 0 else 270)
+
+                self.map[i][j] = {"lat": point.latitude, "lon": point.longitude, "prediction": -1}
+
 
 def main(args=None):
     rclpy.init(args=args)
