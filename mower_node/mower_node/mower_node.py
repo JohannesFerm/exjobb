@@ -22,6 +22,7 @@ import contextlib
 from geopy.distance import geodesic
 from multiprocessing import Process, Queue
 import json
+import pandas as pd
 
 #Helper to avoid ALSA warnings
 @contextlib.contextmanager
@@ -35,16 +36,24 @@ def suppressStderr():
             os.dup2(old_stderr_fd, 2)
             os.close(old_stderr_fd)
 
+#Function that starts the data saving process
+def initDataSaverProcess(dir = "map_logs"):
+    os.makedirs(dir, exist_ok=True)
+    queue = Queue()
+    p = Process(target=dataSaver, args=(queue, dir))
+    p.start()
+    return queue, p
+
 #Function that saves inference data when map building
 def dataSaver(queue, dir):
-    timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+    timestamp = int(time.time())
     sampleDir  = os.path.join(dir, f"sample_{timestamp}")
     os.makedirs(sampleDir, exist_ok=True)
 
     sampleFile = os.path.join(sampleDir, "data.csv")
     with open(sampleFile, 'w', newline="") as file:
-        writer = csv.writer(file)
-        writer.writerow(["spectrogram", "imu", "gps", "label"])
+
+        data = []
         while True:
             sample = queue.get()
             
@@ -59,22 +68,143 @@ def dataSaver(queue, dir):
             
             #Save rows
             elif isinstance(sample, dict): 
-                writer.writerow([sample["spectrogram"], sample["imu"], sample["gps"], sample["label"]])
-
-
-#Function that starts the data saving process
-def initDataSaverProcess(dir = "map_logs"):
-    os.makedirs(dir, exist_ok=True)
-    queue = Queue()
-    p = Process(target=dataSaver, args=(queue, dir))
-    p.start()
-    return queue, p
+                data.append(sample)
+        
+        df = pd.DataFrame(data)
+        picklePath = os.path.join(sampleDir, "data.pkl")
+        df.to_pickle(picklePath)
 
 #Function that stops the data saving process
-def stopDataSaverProcess(queue, process):
-    queue.put("STOP")
+def stopDataSaverProcess(queue, process, map):
+    stop = {"type": "STOP"}
+    if map:
+        stop["map"] = map
+    queue.put(stop)
+    queue.close()
+    queue.join_thread()
     process.join()
 
+#Function to start process that updates map
+def initModelIdle(model):
+    cQueue = Queue()
+    mQueue = Queue()
+    p = Process(target=useModelInIdle, args=(model, cQueue, mQueue))
+    p.start()
+    return cQueue, mQueue, p
+
+#Function to update the map in the background when the UI is on the main page
+def useModelInIdle(modelPath, commandQueue, mapQueue, dataPath = "map_logs"):
+    print("START OF USEMODELINIDLE", flush=True)
+    print(f"Model path: {modelPath}", flush = True)
+
+    #Unfortunate code duplication here, but seems to be easiest way
+    def buildMapProcess(mapArg, pos, pred, mapDim):
+        closestI, closestJ = None, None
+        minDiff = float('inf') 
+
+        #Loop through map
+        for i in range(mapDim):
+            for j in range(mapDim):
+                cell = mapArg[i][j]
+                if cell is None:
+                    continue
+
+                latDiff = abs(pos[0] - cell["lat"])
+                lonDiff = abs(pos[1] - cell["lon"])
+                diff = latDiff + lonDiff
+
+                #Find the cell with the most similar gps position
+                if diff < minDiff:
+                    minDiff = diff
+                    closestI, closestJ = i, j
+
+        #Insert prediction in the map
+        if closestI is not None and closestJ is not None:
+            mapArg[closestI][closestJ]["prediction"] = pred
+
+    print("BEFORE MODEL LOADING OF USEMODELINIDLE", flush=True)
+
+    #Load the model
+    checkpoint = torch.load(modelPath, map_location=torch.device('cpu'))
+    print("LOAD SUCCESSFULL", flush=True)
+    NUM_CLASSES = len(checkpoint['label_mapping'])
+    print("LOAD SUCCESSFULL2", flush=True)
+    try:
+        print("Instantiating model...", flush=True)
+        model = MultimodalModel(numClasses=NUM_CLASSES)
+        print("Model instantiated successfully", flush=True)
+    except Exception as e:
+        print("Error during model instantiation:", e, flush=True)
+        import traceback
+        traceback.print_exc()
+
+    #model = MultimodalModel(numClasses=NUM_CLASSES)
+    print("LOAD SUCCESSFULL3", flush=True)
+    model.load_state_dict(checkpoint['model_state_dict'])
+    print("LOAD SUCCESSFULL4", flush=True)
+    model.eval()
+
+    print("AFTER MODEL LOADING OF USEMODELINIDLE", flush=True)
+
+    df = None
+    lastRow = 0
+    while True:
+        print("BEFORE COMMAND", flush=True)
+        command = commandQueue.get()
+        print("AFTER COMMAND", flush=True)
+        
+        #If new map data is coming in, use the latest log file
+        if command == "newData":
+            folders = [f for f in os.listdir(dataPath) if os.path.isdir(os.path.join(dataPath, f))]
+            latestFolder = max(folders, key=lambda folder: os.path.getmtime(os.path.join(dataPath, folder)))
+            pickleFile = os.path.join(latestFolder, 'data.pkl')
+            if os.path.exists(pickleFile):
+                df = pd.read_pickle(pickleFile)
+                lastRow = 0
+            else:
+                print("FILE NOT FOUND")
+                continue
+
+            mapPath = os.path.join(latestFolder, "map.json")
+            if os.path.exists(mapPath):
+                with open(mapPath, "r") as f:
+                    mapData = json.load(f)
+            else:
+                print("FILE NOT FOUND")
+                continue
+
+        #If in idle state on the UI, start processing and updating the map
+        elif command == "idle":
+            print("IDLE COMMAND", flush=True)
+            if df is not None:
+                for index in  range(lastRow, len(df)):
+                    if not commandQueue.empty():
+                        command = commandQueue.get()
+                        if command == "busy":
+                            lastRow = index
+                            if mapData is not None:
+                                mapQueue.put(mapData)
+                            break
+
+                    row = df.iloc[index]
+                    audio = row["spectrogram"]
+                    imu = row["imu"]
+
+                    audioTensor = torch.tensor(audio, dtype=torch.float32).unsqueeze(0).unsqueeze(1)
+                    imuTensor = torch.tensor(np.stack(imu), dtype=torch.float32).unsqueeze(0)
+
+                    with torch.no_grad():
+                        output = model(audioTensor, imuTensor)
+
+                    probs = torch.softmax(output, dim=1)
+                    confidence, pred = torch.max(probs, 1)
+                    pred = pred.item()
+                    if pred == row["label"]:
+                        continue
+                    if confidence > 0.7: #Use a high confidence, so only change/update map if prediction is high certainty
+                        buildMapProcess(mapData, row["gps"], pred, len(mapData))
+                else:
+                    lastRow = len(df)
 
 class MowerNode(Node):
     def __init__(self):
@@ -136,6 +266,10 @@ class MowerNode(Node):
         self.wheel0buffer = []
         self.wheel1buffer = []
 
+        #For the map idle updating process, start it
+        self.commandQueue, self.mapQueue, self.mapProcess = initModelIdle(modelPath)
+        self.commandQueue.put("idle")
+
         #Setup flask server
         self.app = Flask(__name__, template_folder="templates")
 
@@ -149,6 +283,15 @@ class MowerNode(Node):
             #Start a new thread for the recording
             if not self.recording:
                 self.recording = True
+
+                #Tell the map building process to stop and get new map if there is one
+                self.commandQueue.put("busy")
+                if not self.mapQueue.empty():
+                    newMap = self.mapQueue.get()
+                    self.map = newMap
+                else:
+                    print("Map queue empty")
+
                 thread = threading.Thread(target=self.record, args=(label,))
                 thread.start()
             return jsonify({"status": f"Recording {label}"})
@@ -157,12 +300,22 @@ class MowerNode(Node):
         @self.app.route("/stop", methods=['GET'])
         def stop_recording():
             self.recording = False 
+            self.commandQueue.put("idle")
             return jsonify({"status": "Recording stopped"})
         
         #For testing the model
         @self.app.route("/start-test", methods=['GET'])
         def startTest():
             self.testing = True
+
+            #Tell the map building process to stop and get new map if there is one
+            self.commandQueue.put("busy")
+            if not self.mapQueue.empty():
+                newMap = self.mapQueue.get()
+                self.map = newMap
+            else:
+                print("Map queue empty")
+
             threading.Thread(target=self.runModel, daemon=True).start()
             return jsonify({"status": "Test started"})
         
@@ -170,6 +323,7 @@ class MowerNode(Node):
         @self.app.route("/stop-test", methods=["GET"])
         def stopTest():
             self.testing = False
+            self.commandQueue.put("idle")
             return jsonify({"status": "Test stopped"})
 
         #For getting the current prediction to put on screen
@@ -185,9 +339,19 @@ class MowerNode(Node):
         def startMapBuilding():
             self.mapBuilding = True
             self.testing = True
+
+            #Tell the map building process to stop and get new map if there is one
+            self.commandQueue.put("busy")
+            if not self.mapQueue.empty():
+                newMap = self.mapQueue.get()
+                self.map = newMap
+            else:
+                print("Map queue empty")
+
             if self.startPos is None:
                 self.startPos = self.pos
                 self.createMap(self.startPos)
+            self.queue, self.process = initDataSaverProcess() #Start the data saving process
             threading.Thread(target=self.runModel, daemon=True).start()
             return jsonify({"status": "Map building started"})
         
@@ -196,6 +360,9 @@ class MowerNode(Node):
         def stopMapBuilding():
             self.mapBuilding = False
             self.testing = False
+            stopDataSaverProcess(self.queue, self.process, self.map) #Stop data saving process
+            self.commandQueue.put("newData")
+            self.commandQueue.put("idle")
             return jsonify({"status": "Map building stopped"})
 
         @self.app.route("/map", methods=["GET"])
@@ -208,7 +375,6 @@ class MowerNode(Node):
                     row.append(prediction)  
                 processedMap.append(row) 
             return jsonify({"map": processedMap})
-
 
         flask_thread = threading.Thread(target=self.run_flask, daemon=True)
         flask_thread.start()
@@ -235,10 +401,12 @@ class MowerNode(Node):
 
     #Callbacks for wheel speed, 25 ms
     def wheel0Callback(self, msg):
-        self.wheel0buffer.append(msg.speed)
+        if self.testing:
+            self.wheel0buffer.append(msg.speed)
 
     def wheel1Callback(self, msg):
-        self.wheel1buffer.append(msg.speed)
+        if self.testing:
+            self.wheel1buffer.append(msg.speed)
 
     def run_flask(self):
         self.app.run(host="0.0.0.0", port=5000, debug=False, use_reloader=False)
@@ -353,7 +521,8 @@ class MowerNode(Node):
         audioTensor = torch.tensor(soundClip, dtype=torch.float32).unsqueeze(0).unsqueeze(1)
         imuTensor = torch.tensor(np.stack(imuBufferCur), dtype=torch.float32).unsqueeze(0)
         
-        output = self.model.forward(audioTensor, imuTensor)
+        with torch.no_grad():
+            output = self.model.forward(audioTensor, imuTensor)
 
         probs = torch.softmax(output, dim=1)
         confidence, pred = torch.max(probs, 1)
@@ -367,6 +536,12 @@ class MowerNode(Node):
 
         if self.mapBuilding and self.pos is not None:
             self.buildMap(currentPos, self.prediction)
+            self.queue.put({
+                "spectrogram": soundClip,
+                "imu": imuBufferCur,                
+                "gps": currentPos,                
+                "label": self.prediction              
+            })
 
     #Function to add prediction to right position in the map
     def buildMap(self, pos, pred):
