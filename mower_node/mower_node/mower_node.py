@@ -80,7 +80,7 @@ class MowerNode(Node):
         self.map = [[{"lat": None, "lon": None, "prediction": -1} for _ in range(self.mapDim)] for _ in range(self.mapDim)]
 
         #Load the model
-        modelPath = "models/model_with_labels.pth"
+        modelPath = "models/modelFin.pth"
         checkpoint = torch.load(modelPath, map_location=torch.device('cpu'))
         NUM_CLASSES = len(checkpoint['label_mapping'])
         self.model = MultimodalModel(numClasses=NUM_CLASSES)
