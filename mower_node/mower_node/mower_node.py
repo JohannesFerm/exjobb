@@ -61,6 +61,7 @@ class MowerNode(Node):
         self.gpsSub = self.create_subscription(MowerGnssPosition, '/hqv_mower/gnss/position', self.GPSCallback, 10)
         self.gpsFile = None
         self.pos = None
+        self.gpsBuffer = [[0.0, 0.0] for _ in range(2)]
         
         self.sampleFolder = None
 
@@ -241,6 +242,8 @@ class MowerNode(Node):
             self.gpsFile.write(f"{time.time()},{msg.latitude},{msg.longitude}\n")
 
         self.pos = [msg.latitude, msg.longitude]
+        self.gpsBuffer.append(self.pos)
+        self.gpsBuffer = self.gpsBuffer[1:]
 
     #Callbacks for wheel speed, 25 ms
     def wheel0Callback(self, msg):
@@ -338,8 +341,13 @@ class MowerNode(Node):
 
         #Set start position for map if haven't
         if self.mapBuilding:
-            currentPos = self.pos #Use this line so that the GPS position isn't affected (updated) by the inference taking half a second
-                                    #If the timing is bad it might happen that the GPS position from the callback belongs to the next clip without this line
+
+            if np.linalg.norm(np.subtract(np.array(self.gpsBuffer[0]), np.array(self.gpsBuffer[1]))) < 0.000009 * 2.75: #See if the buffered positions are close enough, accuracy
+                currentPos = np.mean(np.array(self.gpsBuffer), axis=0) #Use mean of two buffered positions to offset inaccuracy
+                currentPos = currentPos.tolist()
+            else:
+                return
+            
         imuBufferCur = self.imuBuffer #Avoid same issue as GPS
 
         numpyWheel0 = np.array(self.wheel0buffer)
